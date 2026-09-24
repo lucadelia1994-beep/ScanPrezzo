@@ -1,0 +1,267 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>ScanPrezzo</title>
+<script src="https://cdn.jsdelivr.net/npm/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<style>
+:root{
+  --bg:#f5f5f4; --card:#ffffff; --text:#1c1917; --muted:#78716c;
+  --accent:#16a34a; --accent-d:#15803d; --border:#e7e5e4; --danger:#dc2626;
+  box-sizing:border-box; padding-top:env(safe-area-inset-top,0px); padding-bottom:env(safe-area-inset-bottom,0px);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){ --bg:#1c1917; --card:#292524; --text:#f5f5f4; --muted:#a8a29e; --border:#44403c; }
+}
+:root[data-theme="dark"]{ --bg:#1c1917; --card:#292524; --text:#f5f5f4; --muted:#a8a29e; --border:#44403c; }
+html{ scroll-padding-top:env(safe-area-inset-top,0px); }
+*{box-sizing:border-box;}
+body{margin:0;background:var(--bg);color:var(--text);font-family:-apple-system,system-ui,sans-serif;min-height:100%;}
+header{position:sticky;top:0;padding-top:env(safe-area-inset-top,0px);background:var(--bg);z-index:5;border-bottom:1px solid var(--border);}
+h1{font-size:1.2rem;margin:12px 16px 8px;}
+.tabs{display:flex;gap:8px;padding:0 16px 10px;}
+.tab{flex:1;padding:10px;border-radius:10px;text-align:center;border:1px solid var(--border);background:var(--card);color:var(--muted);font-weight:600;cursor:pointer;}
+.tab.active{background:var(--accent);color:#fff;border-color:var(--accent);}
+main{padding:16px;padding-bottom:calc(24px + env(safe-area-inset-bottom,0px));max-width:520px;margin:0 auto;}
+.card{background:var(--card);border:1px solid var(--border);border-radius:14px;padding:14px;margin-bottom:12px;}
+#reader{width:100%;border-radius:12px;overflow:hidden;}
+button{font:inherit;border:none;border-radius:10px;padding:12px 16px;cursor:pointer;}
+.btn-primary{background:var(--accent);color:#fff;width:100%;font-weight:700;}
+.btn-primary:active{background:var(--accent-d);}
+.btn-secondary{background:transparent;color:var(--muted);border:1px solid var(--border);width:100%;margin-top:8px;}
+input{font:inherit;width:100%;padding:11px;border-radius:10px;border:1px solid var(--border);background:var(--bg);color:var(--text);margin-top:4px;}
+label{font-size:.85rem;color:var(--muted);}
+.field{margin-bottom:12px;}
+.hidden{display:none !important;}
+.product-row{display:flex;justify-content:space-between;align-items:center;cursor:pointer;}
+.product-name{font-weight:600;}
+.product-ean{font-size:.75rem;color:var(--muted);}
+.price-latest{font-weight:700;color:var(--accent);}
+.history-list{margin-top:10px;border-top:1px solid var(--border);padding-top:8px;}
+.history-item{display:flex;justify-content:space-between;font-size:.9rem;padding:4px 0;}
+.stats{display:flex;gap:14px;margin-top:8px;font-size:.8rem;color:var(--muted);}
+.search{margin-bottom:12px;}
+.empty{color:var(--muted);text-align:center;padding:30px 0;}
+.pill{font-size:.7rem;padding:2px 8px;border-radius:999px;background:var(--border);color:var(--muted);}
+.overlay{position:fixed;inset:0;background:rgba(0,0,0,.5);display:flex;align-items:flex-end;z-index:20;}
+.sheet{background:var(--card);width:100%;border-radius:18px 18px 0 0;padding:20px;padding-bottom:calc(24px + env(safe-area-inset-bottom,0px));}
+</style>
+</head>
+<body>
+<header>
+  <h1>🛒 ScanPrezzo</h1>
+  <div class="tabs">
+    <div class="tab active" id="tabScanBtn">Scansiona</div>
+    <div class="tab" id="tabHistBtn">Storico</div>
+  </div>
+</header>
+<main>
+  <div id="viewScan">
+    <div class="card">
+      <div id="reader"></div>
+      <button class="btn-primary" id="startBtn" style="margin-top:12px;">Avvia scansione</button>
+      <button class="btn-secondary" id="manualBtn">Inserisci codice manualmente</button>
+      <div id="scanStatus" style="margin-top:8px;font-size:.85rem;color:var(--muted);"></div>
+    </div>
+  </div>
+  <div id="viewHist" class="hidden">
+    <input class="search" placeholder="Cerca per nome o codice EAN..." id="searchBox">
+    <div id="histList"></div>
+  </div>
+</main>
+
+<div class="overlay hidden" id="overlay">
+  <div class="sheet">
+    <div class="field">
+      <label>Codice a barre (EAN)</label>
+      <input id="eanInput" disabled>
+    </div>
+    <div class="field">
+      <label>Nome prodotto</label>
+      <input id="nameInput" placeholder="es. Pasta De Cecco 500g">
+    </div>
+    <div class="field">
+      <label>Prezzo (€)</label>
+      <input id="priceInput" type="number" step="0.01" inputmode="decimal" placeholder="es. 1.49">
+    </div>
+    <button class="btn-primary" id="saveBtn">Salva prezzo</button>
+    <button class="btn-secondary" id="cancelBtn">Annulla</button>
+  </div>
+</div>
+
+<script>
+// --- Configurazione Supabase: incolla qui i tuoi valori da Settings > API ---
+const SUPABASE_URL = 'https://dycfmcmbsaldjtdzuxog.supabase.co';
+const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImR5Y2ZtY21ic2FsZGp0ZHp1eG9nIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTAyNzgyMjAsImV4cCI6MjEwNTg1NDIyMH0.an01IKcZl_OEHctgCoR2wMLkv8MpVSEFr3oYKWvVhI0';
+// -----------------------------------------------------------------------
+
+let sb = null;
+let store = { mode: 'offline' };
+
+async function initDb(){
+  try{
+    if(SUPABASE_URL.startsWith('http') && SUPABASE_ANON_KEY.length > 20){
+      const { createClient } = supabase;
+      sb = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+      store.mode = 'shared';
+    } else {
+      scanStatus.textContent = 'Configurazione Supabase mancante: modifica SUPABASE_URL e SUPABASE_ANON_KEY nel codice.';
+    }
+  }catch(e){ sb = null; }
+  renderHistory();
+}
+
+async function getProduct(ean){
+  if(!sb) return null;
+  const { data, error } = await sb.from('products').select('*').eq('ean', ean).maybeSingle();
+  if(error){ console.error(error); return null; }
+  return data;
+}
+
+async function saveProduct(ean, name, price){
+  if(!sb){ alert('Database non configurato.'); return; }
+  const { error: e1 } = await sb.from('products').upsert({ ean, name });
+  if(e1){ console.error(e1); alert('Errore salvataggio prodotto: '+e1.message); return; }
+  const { error: e2 } = await sb.from('prices').insert({ ean, value: Number(price) });
+  if(e2){ console.error(e2); alert('Errore salvataggio prezzo: '+e2.message); }
+}
+
+async function getAllProducts(){
+  if(!sb) return [];
+  const { data: products, error } = await sb.from('products').select('*');
+  if(error){ console.error(error); return []; }
+  const { data: prices } = await sb.from('prices').select('*').order('created_at', { ascending: false });
+  const grouped = {};
+  (prices||[]).forEach(p => { (grouped[p.ean] = grouped[p.ean] || []).push({ value: Number(p.value), date: p.created_at }); });
+  return (products||[]).map(p => ({ ean: p.ean, name: p.name, prices: grouped[p.ean] || [] }));
+}
+
+// ---- Tabs ----
+const tabScanBtn = document.getElementById('tabScanBtn');
+const tabHistBtn = document.getElementById('tabHistBtn');
+const viewScan = document.getElementById('viewScan');
+const viewHist = document.getElementById('viewHist');
+tabScanBtn.onclick = ()=>{ tabScanBtn.classList.add('active'); tabHistBtn.classList.remove('active'); viewScan.classList.remove('hidden'); viewHist.classList.add('hidden'); };
+tabHistBtn.onclick = ()=>{ tabHistBtn.classList.add('active'); tabScanBtn.classList.remove('active'); viewHist.classList.remove('hidden'); viewScan.classList.add('hidden'); renderHistory(); };
+
+// ---- Scanner ----
+let scanner = null;
+const startBtn = document.getElementById('startBtn');
+const scanStatus = document.getElementById('scanStatus');
+
+startBtn.onclick = async ()=>{
+  if(scanner) return;
+  scanStatus.textContent = 'Avvio fotocamera...';
+  scanner = new Html5Qrcode('reader');
+  const formats = [
+    Html5QrcodeSupportedFormats.EAN_13, Html5QrcodeSupportedFormats.EAN_8,
+    Html5QrcodeSupportedFormats.UPC_A, Html5QrcodeSupportedFormats.UPC_E,
+    Html5QrcodeSupportedFormats.CODE_128
+  ];
+  try{
+    await scanner.start(
+      { facingMode: 'environment' },
+      { fps: 10, qrbox: { width: 260, height: 140 }, formatsToSupport: formats },
+      onScanSuccess,
+      ()=>{}
+    );
+    scanStatus.textContent = 'Inquadra il codice a barre del prodotto.';
+    startBtn.classList.add('hidden');
+  }catch(e){
+    let msg = 'Impossibile accedere alla fotocamera.';
+    const name = e && (e.name || (typeof e === 'string' ? e : ''));
+    if(name === 'NotAllowedError' || /permission/i.test(String(e))) msg = 'Permesso fotocamera negato per questo sito. Vedi sotto come sbloccarlo, oppure inserisci il codice manualmente.';
+    else if(name === 'NotFoundError') msg = 'Nessuna fotocamera trovata su questo dispositivo.';
+    else if(name === 'NotSupportedError' || name === 'NotReadableError') msg = 'Fotocamera non disponibile in questo contesto (serve https e nessun\'altra app la stia già usando).';
+    scanStatus.textContent = msg;
+    scanner = null;
+  }
+};
+
+document.getElementById('manualBtn').onclick = async ()=>{
+  const ean = window.prompt('Inserisci il codice a barre (EAN):');
+  if(!ean || !ean.trim()) return;
+  const clean = ean.trim();
+  const existing = await getProduct(clean);
+  openSheet(clean, existing ? existing.name : '');
+};
+
+async function onScanSuccess(decodedText){
+  if(!scanner) return;
+  try{ await scanner.stop(); }catch(e){}
+  scanner = null;
+  startBtn.classList.remove('hidden');
+  scanStatus.textContent = 'Codice rilevato: ' + decodedText;
+  const existing = await getProduct(decodedText);
+  openSheet(decodedText, existing ? existing.name : '');
+}
+
+// ---- Save sheet ----
+const overlay = document.getElementById('overlay');
+const eanInput = document.getElementById('eanInput');
+const nameInput = document.getElementById('nameInput');
+const priceInput = document.getElementById('priceInput');
+let currentEan = null;
+
+function openSheet(ean, name){
+  currentEan = ean;
+  eanInput.value = ean;
+  nameInput.value = name || '';
+  priceInput.value = '';
+  overlay.classList.remove('hidden');
+}
+document.getElementById('cancelBtn').onclick = ()=>{ overlay.classList.add('hidden'); };
+document.getElementById('saveBtn').onclick = async ()=>{
+  const name = nameInput.value.trim();
+  const price = priceInput.value;
+  if(!name || !price){ alert('Inserisci nome prodotto e prezzo.'); return; }
+  await saveProduct(currentEan, name, price);
+  overlay.classList.add('hidden');
+  renderHistory();
+};
+
+// ---- History ----
+const histList = document.getElementById('histList');
+const searchBox = document.getElementById('searchBox');
+searchBox.oninput = renderHistory;
+
+async function renderHistory(){
+  if(viewHist.classList.contains('hidden') && histList.dataset.rendered) return;
+  const products = await getAllProducts();
+  const q = (searchBox.value||'').toLowerCase();
+  const filtered = products.filter(p => !q || (p.name||'').toLowerCase().includes(q) || (p.ean||'').includes(q));
+  filtered.sort((a,b)=> (a.name||'').localeCompare(b.name||''));
+  histList.dataset.rendered = '1';
+  if(filtered.length === 0){
+    histList.innerHTML = '<div class="empty">Nessun prodotto ancora scansionato.<br>' +
+      (store.mode==='shared' ? 'I prezzi salvati qui sono condivisi con chi apre questa pagina.' : 'I prezzi sono salvati solo su questo dispositivo.') + '</div>';
+    return;
+  }
+  histList.innerHTML = filtered.map((p, idx) => {
+    const prices = (p.prices||[]).slice().sort((a,b)=> new Date(b.date)-new Date(a.date));
+    const last = prices[0];
+    const vals = prices.map(x=>x.value);
+    const min = Math.min(...vals).toFixed(2), max = Math.max(...vals).toFixed(2);
+    const avg = (vals.reduce((a,b)=>a+b,0)/vals.length).toFixed(2);
+    const rows = prices.map(x => `<div class="history-item"><span>${new Date(x.date).toLocaleDateString('it-IT')}</span><span>€ ${x.value.toFixed(2)}</span></div>`).join('');
+    return `<div class="card">
+      <div class="product-row" onclick="toggleHist(${idx})">
+        <div><div class="product-name">${escapeHtml(p.name||'(senza nome)')}</div><div class="product-ean">${p.ean} · <span class="pill">${prices.length} sparate</span></div></div>
+        <div class="price-latest">€ ${last.value.toFixed(2)}</div>
+      </div>
+      <div class="history-list hidden" id="hist-${idx}">
+        <div class="stats"><span>Min € ${min}</span><span>Media € ${avg}</span><span>Max € ${max}</span></div>
+        ${rows}
+      </div>
+    </div>`;
+  }).join('');
+}
+function toggleHist(idx){ document.getElementById('hist-'+idx).classList.toggle('hidden'); }
+function escapeHtml(s){ return s.replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+
+initDb();
+</script>
+</body>
+</html>
